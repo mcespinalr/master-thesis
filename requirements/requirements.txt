@@ -68,8 +68,8 @@ pyparsing==3.2.1
 python-dateutil==2.9.0.post0
 python-louvain==0.16
 pytz==2025.1
-pyvista==0.44.2
-pyvistaqt==0.11.2
+#pyvista==0.44.2
+#pyvistaqt==0.11.2
 pyzmq==26.2.1
 QtPy==2.4.2
 requests==2.32.3
@@ -91,7 +91,7 @@ typing_extensions==4.12.2
 tzdata==2025.1
 umap-learn==0.5.7
 urllib3==2.3.0
-vtk==9.3.1
+vtk
 wcwidth==0.2.13
 wfdb==4.3.0
 widgetsnbextension==4.0.13

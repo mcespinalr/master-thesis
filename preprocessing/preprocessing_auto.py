@@ -612,6 +612,12 @@ def save_array_as_mat(array, ruta_archivo, nombre_variable):
     if not isinstance(array, np.ndarray):
         raise TypeError("El argumento 'array' debe ser un numpy.ndarray")
     
+    # Ensure the directory exists
+    directory = os.path.dirname(ruta_archivo)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Directorio creado: {directory}")
+    
     try:
         scipy.io.savemat(ruta_archivo, {nombre_variable: array})
         print(f"Archivo guardado correctamente en: {ruta_archivo}")
@@ -619,8 +625,10 @@ def save_array_as_mat(array, ruta_archivo, nombre_variable):
         print(f"Error al guardar el archivo .mat: {e}")
 
 
+
 # Save a pandas DataFrame to a CSV file
-def save_dataframe(df, filepath, mode="w", index=False):
+def save_dataframe(df, filepath,mode="w", index=False):
+    filepath
     # Ensure folder exists
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     # Save DataFrame
@@ -715,10 +723,10 @@ def reconstruct_signal(raw_eeg_clean):
 
 
 # Update csv
-def update_df(patient_metadata, df_patient, bci_score):
+def update_df(patient_metadata, df_patient, patient_id, bci_score):
     # Build a row with only the required fields
     row = {
-        "patient": patient_metadata.get("Patient"),
+        "patient": patient_id,
         "hospital": patient_metadata.get("Hospital"),
         "age": patient_metadata.get("Age"),
         "sex": patient_metadata.get("Sex"),
@@ -738,7 +746,7 @@ def update_df(patient_metadata, df_patient, bci_score):
 
 
 # Test BCI score for a patient, update patient registry, and reconstruct signal if passed
-def test_bci_score(raw_eeg_clean, patient_metadata, base_dir, csv_path, bci_thresh=0.5):
+def test_bci_score(raw_eeg_clean, patient_metadata, base_dir, csv_path, patient_id, bci_thresh=0.5):
     # Load patient registry
     df_patients = load_or_create_patient_csv(csv_path)
 
@@ -748,18 +756,17 @@ def test_bci_score(raw_eeg_clean, patient_metadata, base_dir, csv_path, bci_thre
     if signal_out is not None:
         # Reconstruct virtual electrodes
         virtual_electrodes = reconstruct_signal(raw_eeg_clean)
-        # Save filtered raw matrix
-        id_patient = patient_metadata["Patient"]
-        save_array_as_mat(virtual_electrodes, f"{base_dir}{id_patient}/filtered_raw/{id_patient}_filtered_raw.mat", "data")
+        
+        save_array_as_mat(virtual_electrodes, f"{base_dir}{patient_id}/filtered_raw/{patient_id}_filtered_raw.mat", "data")
         # Update DataFrame with PASS
-        df_patients = update_df(patient_metadata, df_patients, "Pass")
+        df_patients = update_df(patient_metadata, df_patients, patient_id, "Pass")
         # Upload csv
         save_dataframe(df_patients, csv_path, mode="w", index=False)
 
     else:
         virtual_electrodes = None
         # Update DataFrame with FAIL
-        df_patients = update_df(patient_metadata, df_patients, "Fail")
+        df_patients = update_df(patient_metadata, df_patients, patient_id,  "Fail")
         # Upload csv
         save_dataframe(df_patients, csv_path, mode="w", index=False)
 
@@ -813,12 +820,10 @@ def collect_patient_files(base_dir):
 def iterate_patients(base_dir):
     csv_path = "patients.csv"
     patients_data = collect_patient_files(base_dir)
+    print(f"Pacientes encontrados: {list(patients_data.keys())}")
 
     for patient_id, patient_files in patients_data.items():
-        if None in patient_files.values():
-            print(f"Skipping {patient_id} (missing files)")
-            continue
-
+        print(f"\nProcesando paciente {patient_id}: {patient_files}")  # Verifica que entra al bucle
         try:
             # Clean signal and get metadata
             raw_eeg_clean, patient_metadata = clean_signal(patient_files)
@@ -829,6 +834,7 @@ def iterate_patients(base_dir):
                 patient_metadata,
                 base_dir,
                 csv_path,
+                patient_id,
                 bci_thresh=0.5
             )
 
@@ -844,3 +850,5 @@ def iterate_patients(base_dir):
             print(f"Error processing {patient_id}: {e}")
 
 
+base_dir = "Data/"
+iterate_patients(base_dir)
