@@ -100,22 +100,22 @@ def load_or_create_patient_csv(ruta_archivo, verbose=True):
 
 # Load .mat and .hea data
 def load_signal_pair(mat_file, hea_file):
-    # Cargar matriz desde archivo .mat
+    # Load matrix from .mat
     mat = loadmat(mat_file)
     signal = mat['val']  # [n_channels, n_samples]
 
-    # Leer archivo .hea
+    # Read.hea file
     with open(hea_file, 'r') as f:
         lines = f.readlines()
 
     header_main = lines[0].strip().split()
     num_channels = int(header_main[1])
 
-    # Frecuencia de muestreo (fs) está en la primera línea, tercer campo
+    # The sampling frequency (fs) is in the first line, third field
     fs = float(lines[0].split()[2])
 
     channel_lines = [line for line in lines[1:] if len(line.split()) >= 9]
-    # Extraer nombre del canal (9º campo en cada línea válida)
+    # Extract the channel name (9th field in each valid line)
     channels = [line.split()[8] for line in channel_lines]
 
     assert signal.shape[0] == len(channels), f"Canales en {mat_file} no coinciden con .hea"
@@ -146,7 +146,6 @@ def create_raw_array(signal, channels, sfreq, group):
 
     info = mne.create_info(ch_names=channels, sfreq=sfreq, ch_types=ch_types)
 
-    # Solo escalar si el grupo es EEG (o si el canal es eeg)
     if all(t == 'eeg' for t in ch_types):
         raw = mne.io.RawArray(signal * 1e-6, info, verbose=False)
     else:
@@ -180,23 +179,23 @@ def reject_and_interpolate(raw, picks="eeg", flat_thresh=1e-6, noisiness_z=4.0, 
 
     bads = []
 
-    # Detectar canales planos
-    ptps = np.ptp(data, axis=1)
+    # Detect flat channels (channels with no signal variation)
+    ptps = np.ptp(data, axis=1)  # Peak-to-peak calculation to identify flat channels
     bads.extend(ch_names[np.where(ptps < flat_thresh)[0]])
 
-    # Detectar canales ruidosos (varianza anómala)
-    variances = data.var(axis=1)
-    vz = (variances - variances.mean()) / variances.std()
+    # Detect noisy channels (channels with anomalous variance)
+    variances = data.var(axis=1)  # Calculate variance for each channel
+    vz = (variances - variances.mean()) / variances.std()  # Z-score for variance
     bads.extend(ch_names[np.where(np.abs(vz) > noisiness_z)[0]])
 
-    # Eliminar duplicados y añadir a info['bads']
+    # Remove duplicates and add to info['bads']
     bads = list(set(bads))
     raw_copy.info['bads'].extend([ch for ch in bads if ch not in raw_copy.info['bads']])
 
     if verbose:
-        print("Canales malos detectados:", bads if bads else "Ninguno")
+        print("Bad channels detected:", bads if bads else "None")
 
-    # Interpolar
+    # Interpolate bad channels if any
     if bads:
         raw_interp = raw_copy.interpolate_bads(reset_bads=True)
     else:
@@ -205,10 +204,15 @@ def reject_and_interpolate(raw, picks="eeg", flat_thresh=1e-6, noisiness_z=4.0, 
     return raw_interp
 
 
+
 # Remove artefacts with ICA
-def apply_ica_ecg_removal(filtered_eeg, filtered_ecg, ecg_ch_name="ECG",
+def apply_ica_ecg_removal(filtered_eeg, filtered_ecg, ecg_ch_names=None,
                           n_components=0.95, random_state=97, max_iter="auto",
                           verbose=True):
+    # Default ECG channel names to check if not provided
+    if ecg_ch_names is None:
+        ecg_ch_names = ['ECG', 'ECG1', 'ECG2', 'ECGL', 'ECGR']
+    
     # --- 1. Combine EEG and ECG channels ---
     raw_combined = filtered_eeg.copy().add_channels([filtered_ecg], force_update_info=True)
 
@@ -216,12 +220,24 @@ def apply_ica_ecg_removal(filtered_eeg, filtered_ecg, ecg_ch_name="ECG",
     ica = ICA(n_components=n_components, random_state=random_state, max_iter=max_iter)
     ica.fit(raw_combined)
 
-    # --- 3. Detect ECG-related ICA components ---
+    # --- 3. Automatically detect ECG channel ---
+    # Search for matching ECG channels
+    matching_ecg_chs = [ch for ch in raw_combined.info['ch_names'] if any(ecg_name in ch for ecg_name in ecg_ch_names)]
+    
+    if not matching_ecg_chs:
+        raise ValueError(f"No ECG channel found in the list: {ecg_ch_names}")
+
+    # Use the first matching ECG channel
+    ecg_ch_name = matching_ecg_chs[0]
+    if verbose:
+        print(f"Using detected ECG channel: {ecg_ch_name}")
+
+    # --- 4. Detect ECG-related ICA components ---
     ecg_inds, scores = ica.find_bads_ecg(raw_combined, ch_name=ecg_ch_name)
     if verbose:
         print("Automatically detected ECG-related components:", ecg_inds)
 
-    # --- 3.1 Fallback if no components detected ---
+    # --- 4.1 Fallback if no components detected ---
     if len(ecg_inds) == 0:
         manual_ecg = int(np.argmax(scores))
         if verbose:
@@ -233,14 +249,14 @@ def apply_ica_ecg_removal(filtered_eeg, filtered_ecg, ecg_ch_name="ECG",
     if verbose:
         print("Excluded components:", ica.exclude)
 
-    # --- 4. Apply ICA cleaning ---
+    # --- 5. Apply ICA cleaning ---
     raw_clean = raw_combined.copy()
     ica.apply(raw_clean)
 
-    # --- 5. Keep only EEG channels ---
+    # --- 6. Keep only EEG channels ---
     raw_eeg_clean = raw_clean.copy().pick(picks="eeg")
 
-    # --- 6. Sanity check ---
+    # --- 7. Sanity check ---
     data_orig, _ = filtered_eeg[:, :1000]
     data_clean, _ = raw_eeg_clean[:, :1000]
 
@@ -252,6 +268,7 @@ def apply_ica_ecg_removal(filtered_eeg, filtered_ecg, ecg_ch_name="ECG",
             print("ICA applied successfully (signals differ).")
 
     return raw_eeg_clean
+
 
 
 
@@ -511,7 +528,7 @@ def run_source_reconstruction(
     montage="standard_1020",
     mindist=5.0,
     method="eLORETA",
-    duration=30, # 30 seconds
+    duration=300, # 30 seconds
     snr=3.0,
     verbose=True,
 ):
@@ -716,7 +733,7 @@ def reconstruct_signal(raw_eeg_clean):
     # BEM model
     src, bem = setup_src_and_bem(subject, subjects_dir, spacing="oct6")
     # Forward model and ineverse solution
-    stc_fragment= run_source_reconstruction(raw_eeg_clean, src, bem, method="eLORETA", duration=30)
+    stc_fragment= run_source_reconstruction(raw_eeg_clean, src, bem, method="eLORETA", duration=300)
     # Virtual electrodes
     virtual_electrodes = extract_virtual_electrodes(stc_fragment, subjects_dir, subject="fsaverage", parc="aparc.a2009s")
     return virtual_electrodes
@@ -826,8 +843,9 @@ def iterate_patients(base_dir):
 
     for elemento in patients_data:
         # Each element is structured as {patient_id: patient_files}
-        patient_id, patient_files = next(iter(elemento.items()))
-        print(f"\nProcesando paciente {patient_id}: {patient_files}")  
+        id_patient, patient_files = next(iter(elemento.items()))
+        patient_id = str(id_patient)
+        print(f"\nProcessing patient {patient_id}: {patient_files}")  
         try: 
             # Clean signal and get metadata
             raw_eeg_clean, patient_metadata = clean_signal(patient_files)
@@ -854,5 +872,5 @@ def iterate_patients(base_dir):
             print(f"Error processing {patient_id}: {e}")
 
 
-base_dir = "data/"
+base_dir = "Data/"
 iterate_patients(base_dir)
