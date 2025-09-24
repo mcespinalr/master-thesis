@@ -828,32 +828,31 @@ def iterate_patients(base_dir):
         # Each element is structured as {patient_id: patient_files}
         patient_id, patient_files = next(iter(elemento.items()))
         print(f"\nProcesando paciente {patient_id}: {patient_files}")  
-        try:
-            print(f"\nProcesando paciente {patient_id}: {patient_files}")  
+        try: 
             # Clean signal and get metadata
-            #raw_eeg_clean, patient_metadata = clean_signal(patient_files)
+            raw_eeg_clean, patient_metadata = clean_signal(patient_files)
 
             # Test BCI score → returns virtual electrodes
-            # virtual_electrodes = test_bci_score(
-            #     raw_eeg_clean,
-            #     patient_metadata,
-            #     base_dir,
-            #     csv_path,
-            #     patient_id,
-            #     bci_thresh=0.5
-            # )
+            virtual_electrodes = test_bci_score(
+                raw_eeg_clean,
+                patient_metadata,
+                base_dir,
+                csv_path,
+                patient_id,
+                bci_thresh=0.5
+            )
 
             # Skip if virtual electrodes not available
-            # if virtual_electrodes is None:
-            #     print(f"Skipping {patient_id}: no virtual electrodes (Fail case).")
-            #     continue  
+            if virtual_electrodes is None:
+                print(f"Skipping {patient_id}: no virtual electrodes (Fail case).")
+                continue  
 
             # If electrodes exist → process correlation
-            #get_corr_matrix(virtual_electrodes, patient_id, base_dir)
+            get_corr_matrix(virtual_electrodes, patient_id, base_dir)
 
         except Exception as e:
             print(f"Error processing {patient_id}: {e}")
 
 
-base_dir = "/home/mriesn/Universidad/2025-2/Tesis/Code/data/"
+base_dir = "data/"
 iterate_patients(base_dir)
