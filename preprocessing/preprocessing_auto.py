@@ -20,7 +20,8 @@ from matplotlib.colors import SymLogNorm
 # === MNE: core + IO ===
 import mne
 from mne import create_info, read_labels_from_annot
-from mne.io import RawArray
+from mne.io import RawArray, Raw
+
 
 # === MNE: preprocessing ===
 from mne.preprocessing import ICA, create_ecg_epochs
@@ -312,7 +313,15 @@ def apply_ica_eeg_only(filtered_eeg,
 
     return raw_eeg_clean
 
+# Save preprocessing result
+def save_ica_results(raw_eeg_clean: Raw, save_dir: str, filename_raw):
+    os.makedirs(save_dir, exist_ok=True)
 
+    # Save cleaned EEG signal
+    eeg_path = os.path.join(save_dir, filename_raw)
+    raw_eeg_clean.save(eeg_path, overwrite=True)
+
+    print(f"Saved cleaned EEG to: {eeg_path}")
 
 # ------------------------------------------------------------------------
 
@@ -570,7 +579,7 @@ def run_source_reconstruction(
     montage="standard_1020",
     mindist=5.0,
     method="eLORETA",
-    duration=300, # 30 seconds
+    duration=30, # 30 seconds
     snr=3.0,
     verbose=True,
 ):
@@ -628,6 +637,122 @@ def run_source_reconstruction(
         print(f"Inverse solution ({method}) computed successfully.")
 
     return stc_fragment
+
+
+# def run_source_reconstruction(
+#     raw_eeg_limpio,
+#     src,
+#     bem,
+#     trans="fsaverage",
+#     montage="standard_1020",
+#     mindist=5.0,
+#     method="eLORETA",
+#     total_duration=300,       # total duration in seconds to analyze
+#     chunk_duration=10,        # duration of each chunk in seconds
+#     snr=3.0,
+#     verbose=True,
+# ):
+#     """
+#     Applies source reconstruction to EEG data in time chunks to reduce memory usage.
+
+#     Parameters
+#     ----------
+#     raw_eeg_limpio : mne.io.Raw
+#         The preprocessed EEG data.
+#     src : mne.SourceSpaces
+#         The source space.
+#     bem : str or instance of ConductorModel
+#         The BEM solution or file.
+#     trans : str
+#         The transformation between head and MRI coordinates (e.g., "fsaverage").
+#     montage : str
+#         Name of the EEG montage to apply.
+#     mindist : float
+#         Minimum distance (in mm) from the source space to the inner skull surface.
+#     method : str
+#         Inverse method to use ("eLORETA", "MNE", "dSPM", etc.).
+#     total_duration : float
+#         Total duration of data (in seconds) to analyze from the beginning of the recording.
+#     chunk_duration : float
+#         Duration (in seconds) of each processing chunk.
+#     snr : float
+#         Signal-to-noise ratio.
+#     verbose : bool
+#         Whether to print progress messages.
+
+#     Returns
+#     -------
+#     mne.SourceEstimate
+#         A single concatenated source estimate (STC) from all processed chunks.
+#         This can be used directly with `extract_virtual_electrodes()`.
+#     """
+
+#     # --- 1. Apply standard montage ---
+#     montage_obj = mne.channels.make_standard_montage(montage)
+#     raw_con_montaje = raw_eeg_limpio.copy().set_montage(montage_obj)
+
+#     # --- 2. Apply average reference (EEG requirement) ---
+#     raw_con_montaje.set_eeg_reference("average", projection=True)
+
+#     # --- 3. Compute forward solution (leadfield) ---
+#     fwd = mne.make_forward_solution(
+#         raw_con_montaje.info,
+#         trans=trans,
+#         src=src,
+#         bem=bem,
+#         eeg=True,
+#         meg=False,
+#         mindist=mindist,
+#     )
+
+#     # --- 4. Estimate noise covariance from the raw data ---
+#     noise_cov = mne.compute_raw_covariance(raw_con_montaje, tmin=0, tmax=None)
+
+#     # --- 5. Create the inverse operator ---
+#     inverse_operator = make_inverse_operator(
+#         raw_con_montaje.info, fwd, noise_cov, loose=0.2, depth=0.8
+#     )
+
+#     # --- 6. Prepare chunk processing ---
+#     sfreq = raw_con_montaje.info["sfreq"]
+#     lambda2 = 1.0 / snr**2
+#     samples_total = int(sfreq * total_duration)
+#     samples_per_chunk = int(sfreq * chunk_duration)
+#     n_chunks = samples_total // samples_per_chunk
+
+#     if verbose:
+#         print(f"Sampling rate: {sfreq} Hz")
+#         print(f"Processing {n_chunks} chunks of {chunk_duration} seconds each.")
+
+#     # --- 7. Loop through chunks and apply inverse solution ---
+#     stc_chunks = []
+#     for i in range(n_chunks):
+#         start = i * samples_per_chunk
+#         stop = (i + 1) * samples_per_chunk
+
+#         if verbose:
+#             print(f"  ▶ Chunk {i+1}/{n_chunks}: samples {start}–{stop}")
+
+#         stc = apply_inverse_raw(
+#             raw_con_montaje,
+#             inverse_operator,
+#             lambda2=lambda2,
+#             method=method,
+#             start=start,
+#             stop=stop,
+#             buffer_size=1000,
+#             pick_ori=None,
+#         )
+#         stc_chunks.append(stc)
+
+#     # --- 8. Concatenate all source estimates into a single STC ---
+#     stc_concat = mne.concatenate_stcs(stc_chunks)
+
+#     if verbose:
+#         print(f"\nSource reconstruction completed and concatenated using method: {method}.")
+
+#     return stc_concat
+
 
 
 
@@ -747,7 +872,7 @@ def process_virtual_electrodes(virtual_electrodes, fs=500, low_freq=8.0, high_fr
 # -------------------------------------------------------------------
 
 # Clean signal
-def clean_signal(dict_patient):
+def clean_signal(dict_patient, base_dir, id_patient):
     # Load raw EEG data
     eeg_data = load_signal_pair(dict_patient["eeg_mat"], dict_patient["eeg_hea"])
     raw_eeg = create_raw_array(eeg_data['signal'], eeg_data['channels'], eeg_data['fs'], 'EEG')
@@ -760,7 +885,7 @@ def clean_signal(dict_patient):
     raw_eeg_clean = None
 
     # Check if ECG exists
-    if dict_patient.get("ecg_mat") and dict_patient.get("ecg_hea"):
+    if dict_patient.get("ecg_mat") is not None and dict_patient.get("ecg_hea") is not None:
         # Load raw ECG data
         ecg_data = load_signal_pair(dict_patient["ecg_mat"], dict_patient["ecg_hea"])
         raw_ecg = create_raw_array(ecg_data['signal'], ecg_data['channels'], ecg_data['fs'], 'ECG')
@@ -772,9 +897,13 @@ def clean_signal(dict_patient):
 
         # Remove artifacts using ECG as reference
         raw_eeg_clean = apply_ica_ecg_removal(raw_eeg_int, raw_ecg_int)
+        save_ica_results(raw_eeg_clean, f"{base_dir}{id_patient}/preprocessing_result/",
+                     f"{id_patient}_cleaned_eeg_raw.fif")
     else:
         # Fallback: clean EEG without ECG reference
         raw_eeg_clean = apply_ica_eeg_only(raw_eeg_int)
+        save_ica_results(raw_eeg_clean, f"{base_dir}{id_patient}/preprocessing_result/",
+                     f"{id_patient}_cleaned_eeg_raw.fif")
 
     # Load patient metadata from txt file
     patient_metadata = load_metadata_txt(dict_patient["txt"])
@@ -788,9 +917,9 @@ def reconstruct_signal(raw_eeg_clean):
     # Check fsaverage
     subjects_dir, subject = get_and_check_fsaverage(verbose=True)
     # BEM model
-    src, bem = setup_src_and_bem(subject, subjects_dir, spacing="oct6")
+    src, bem = setup_src_and_bem(subject, subjects_dir)
     # Forward model and ineverse solution
-    stc_fragment= run_source_reconstruction(raw_eeg_clean, src, bem, method="eLORETA", duration=300)
+    stc_fragment= run_source_reconstruction(raw_eeg_clean, src, bem)
     # Virtual electrodes
     virtual_electrodes = extract_virtual_electrodes(stc_fragment, subjects_dir, subject="fsaverage", parc="aparc.a2009s")
     return virtual_electrodes
@@ -849,9 +978,9 @@ def test_bci_score(raw_eeg_clean, patient_metadata, base_dir, csv_path, patient_
 # Apply symmetric orthogonalization
 def get_corr_matrix(virtual_electrodes, id_patient, base_dir):
     corr_matrix = process_virtual_electrodes(virtual_electrodes, fs=500, low_freq=8.0, high_freq=12.0, n_ROIs=78)
+    print(f"corr_matrix type: {type(corr_matrix)} | shape: {getattr(corr_matrix, 'shape', None)}")
     # Save matix
     save_array_as_mat(corr_matrix, f"{base_dir}{id_patient}/correlation_matrices/{id_patient}_corr_matrix.mat", "data")
-
 
 
 # Collect EEG, ECG, and TXT file paths for each patient folder
@@ -890,9 +1019,16 @@ def collect_patient_files(base_dir):
 
     return patients_data
 
+def log_error(id_patient, e, file_name="errors.txt"):
+    try:
+        with open(file_name, "a", encoding="utf-8") as f:
+            f.write(f"{id_patient} - {str(e)}\n")
+    except Exception as log_error:
+        print(f"Failed to write to the error log file: {log_error}")
+
 
 def iterate_patients(base_dir):
-    csv_path = "patients.csv"
+    csv_path = "/media/combioslab/DISCO/MEG/Registros/patients.csv"
     patients_data = collect_patient_files(base_dir)
 
     for elemento in patients_data:
@@ -902,7 +1038,7 @@ def iterate_patients(base_dir):
         print(f"\nProcessing patient {patient_id}: {patient_files}")  
         try: 
             # Clean signal and get metadata
-            raw_eeg_clean, patient_metadata = clean_signal(patient_files)
+            raw_eeg_clean, patient_metadata = clean_signal(patient_files, base_dir, patient_id)
 
             # Test BCI score → returns virtual electrodes
             virtual_electrodes = test_bci_score(
@@ -917,14 +1053,14 @@ def iterate_patients(base_dir):
             # Skip if virtual electrodes not available
             if virtual_electrodes is None:
                 print(f"Skipping {patient_id}: no virtual electrodes (Fail case).")
-                continue  
-
             # If electrodes exist → process correlation
-            get_corr_matrix(virtual_electrodes, patient_id, base_dir)
+            else:
+                get_corr_matrix(virtual_electrodes, patient_id, base_dir)
 
         except Exception as e:
+            log_error(patient_id, e, file_name="/media/combioslab/DISCO/MEG/Registros/errors.txt")
             print(f"Error processing {patient_id}: {e}")
 
 
-base_dir = "Data/"
+base_dir = "/media/combioslab/DISCO/MEG/Data_raw/"
 iterate_patients(base_dir)
