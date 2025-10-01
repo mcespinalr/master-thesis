@@ -270,6 +270,48 @@ def apply_ica_ecg_removal(filtered_eeg, filtered_ecg, ecg_ch_names=None,
     return raw_eeg_clean
 
 
+# Apply ICA to remove artifacts from EEG data without requiring an ECG channel
+def apply_ica_eeg_only(filtered_eeg,
+                       n_components=0.95, random_state=97, max_iter="auto",
+                       verbose=True, exclude_manual=None):
+
+    # --- 1. Fit ICA on EEG only ---
+    ica = ICA(n_components=n_components, random_state=random_state, max_iter=max_iter)
+    ica.fit(filtered_eeg)
+
+    if verbose:
+        print("ICA fitted on EEG data.")
+
+    # --- 2. Exclude components ---
+    if exclude_manual is not None:
+        # Use manually provided list of components to remove
+        ica.exclude = exclude_manual
+        if verbose:
+            print(f"Excluding manually selected components: {ica.exclude}")
+    else:
+        if verbose:
+            print("No components excluded automatically. "
+                  "Use `ica.plot_components()` and `ica.plot_sources()` "
+                  "to inspect and decide which components to remove.")
+
+    # --- 3. Apply ICA cleaning ---
+    raw_eeg_clean = filtered_eeg.copy()
+    ica.apply(raw_eeg_clean)
+
+    # --- 4. Sanity check ---
+    # Compare a short segment of original and cleaned signals
+    data_orig, _ = filtered_eeg[:, :1000]
+    data_clean, _ = raw_eeg_clean[:, :1000]
+
+    if np.allclose(data_orig, data_clean):
+        if verbose:
+            print("ICA had no effect (signals are identical).")
+    else:
+        if verbose:
+            print("ICA applied successfully (signals differ).")
+
+    return raw_eeg_clean
+
 
 
 # ------------------------------------------------------------------------
@@ -706,24 +748,39 @@ def process_virtual_electrodes(virtual_electrodes, fs=500, low_freq=8.0, high_fr
 
 # Clean signal
 def clean_signal(dict_patient):
-    # Load raw data
+    # Load raw EEG data
     eeg_data = load_signal_pair(dict_patient["eeg_mat"], dict_patient["eeg_hea"])
-    ecg_data = load_signal_pair(dict_patient["ecg_mat"], dict_patient["ecg_hea"])
-    # Create raw array
     raw_eeg = create_raw_array(eeg_data['signal'], eeg_data['channels'], eeg_data['fs'], 'EEG')
-    raw_ecg = create_raw_array(ecg_data['signal'], ecg_data['channels'], ecg_data['fs'], 'ECG')
-    # Apply band-pass filter
-    filtered_eeg = preprocess_raw_signal(raw_eeg, signal_type="eeg")
-    filtered_ecg = preprocess_raw_signal(raw_ecg, signal_type="ecg")
-    # Interpolate bad channels
-    raw_eeg_int = reject_and_interpolate(filtered_eeg)
-    raw_ecg_int = reject_and_interpolate(filtered_ecg, picks="ecg")
-    # Remove actefacts
-    raw_eeg_clean = apply_ica_ecg_removal(raw_eeg_int, raw_ecg_int)
 
-    # Load txt data
+    # Apply band-pass filter for EEG
+    filtered_eeg = preprocess_raw_signal(raw_eeg, signal_type="eeg")
+    # Interpolate bad EEG channels
+    raw_eeg_int = reject_and_interpolate(filtered_eeg)
+
+    raw_eeg_clean = None
+
+    # Check if ECG exists
+    if dict_patient.get("ecg_mat") and dict_patient.get("ecg_hea"):
+        # Load raw ECG data
+        ecg_data = load_signal_pair(dict_patient["ecg_mat"], dict_patient["ecg_hea"])
+        raw_ecg = create_raw_array(ecg_data['signal'], ecg_data['channels'], ecg_data['fs'], 'ECG')
+
+        # Apply band-pass filter for ECG
+        filtered_ecg = preprocess_raw_signal(raw_ecg, signal_type="ecg")
+        # Interpolate bad ECG channels
+        raw_ecg_int = reject_and_interpolate(filtered_ecg, picks="ecg")
+
+        # Remove artifacts using ECG as reference
+        raw_eeg_clean = apply_ica_ecg_removal(raw_eeg_int, raw_ecg_int)
+    else:
+        # Fallback: clean EEG without ECG reference
+        raw_eeg_clean = apply_ica_eeg_only(raw_eeg_int)
+
+    # Load patient metadata from txt file
     patient_metadata = load_metadata_txt(dict_patient["txt"])
+
     return raw_eeg_clean, patient_metadata
+
 
 
 # Función para reconstuir la señal
@@ -793,7 +850,7 @@ def test_bci_score(raw_eeg_clean, patient_metadata, base_dir, csv_path, patient_
 def get_corr_matrix(virtual_electrodes, id_patient, base_dir):
     corr_matrix = process_virtual_electrodes(virtual_electrodes, fs=500, low_freq=8.0, high_freq=12.0, n_ROIs=78)
     # Save matix
-    save_array_as_mat(corr_matrix, f"{base_dir}{id_patient}/filtered_raw/{id_patient}_corr_matrix.mat", "data")
+    save_array_as_mat(corr_matrix, f"{base_dir}{id_patient}/correlation_matrices/{id_patient}_corr_matrix.mat", "data")
 
 
 
@@ -832,9 +889,6 @@ def collect_patient_files(base_dir):
         patients_data.append({patient_id: patient_files})
 
     return patients_data
-
-
-
 
 
 def iterate_patients(base_dir):
